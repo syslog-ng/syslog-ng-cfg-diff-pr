@@ -1,0 +1,134 @@
+name: syslog-ng CFG diff (comment on PR)
+description: Calculates the config differences that a PR introduces and creates/updates a comment about it.
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout syslog-ng-cfg-helper source
+      uses: actions/checkout@v4
+      with:
+        repository: alltilla/syslog-ng-cfg-helper
+        path: syslog-ng-cfg-helper
+
+    - name: Setup syslog-ng-cfg-helper
+      shell: bash
+      working-directory: syslog-ng-cfg-helper
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
+        make venv
+        make bison BISON_INSTALL_PATH=${GITHUB_WORKSPACE}/bin
+        echo "${GITHUB_WORKSPACE}/bin" >> $GITHUB_PATH
+
+    - name: Checkout syslog-ng
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        path: syslog-ng
+
+    - name: Query PR info and add PR head remote
+      shell: bash
+      working-directory: syslog-ng
+      run: |
+        git fetch origin
+
+        PR_INFO=$(gh -R ${{ github.repository }} pr view ${{ github.event.number }} --json "baseRefName,headRefName,headRepository,headRepositoryOwner")
+        HEAD_REPOSITORY_OWNER=$(echo $PR_INFO | jq -r .headRepositoryOwner.login)
+        HEAD_REPOSITORY=$(echo $PR_INFO | jq -r .headRepository.name)
+        HEAD_REF_NAME=$(echo $PR_INFO | jq -r .headRefName)
+        BASE_REF_NAME=$(echo $PR_INFO | jq -r .baseRefName)
+
+        git remote add ${HEAD_REPOSITORY_OWNER} https://github.com/${HEAD_REPOSITORY_OWNER}/${HEAD_REPOSITORY}.git
+        git fetch ${HEAD_REPOSITORY_OWNER}
+
+        COMMON_ANCESTOR_REF=$(git merge-base origin/${BASE_REF_NAME} ${HEAD_REPOSITORY_OWNER}/${HEAD_REF_NAME})
+
+        echo "HEAD_REPOSITORY_OWNER=${HEAD_REPOSITORY_OWNER}" >> ${GITHUB_ENV}
+        echo "HEAD_REPOSITORY=${HEAD_REPOSITORY}" >> ${GITHUB_ENV}
+        echo "HEAD_REF_NAME=${HEAD_REF_NAME}" >> ${GITHUB_ENV}
+        echo "BASE_REF_NAME=${BASE_REF_NAME}" >> ${GITHUB_ENV}
+        echo "COMMON_ANCESTOR_REF=${COMMON_ANCESTOR_REF}" >> ${GITHUB_ENV}
+
+    - name: Checkout PR base branch
+      shell: bash
+      working-directory: syslog-ng
+      run: |
+        git checkout ${COMMON_ANCESTOR_REF}
+
+    - name: Generate base CFG database
+      shell: bash
+      working-directory: syslog-ng-cfg-helper
+      run: |
+        make clean
+        make db SYSLOG_NG_SOURCE_DIR=${GITHUB_WORKSPACE}/syslog-ng DATABASE_FILE=${GITHUB_WORKSPACE}/base.db
+
+    - name: Checkout PR head branch
+      shell: bash
+      working-directory: syslog-ng
+      run: |
+        git checkout ${HEAD_REPOSITORY_OWNER}/${HEAD_REF_NAME}
+
+    - name: Generate head CFG database
+      shell: bash
+      working-directory: syslog-ng-cfg-helper
+      run: |
+        make clean
+        make db SYSLOG_NG_SOURCE_DIR=${GITHUB_WORKSPACE}/syslog-ng DATABASE_FILE=${GITHUB_WORKSPACE}/head.db
+
+    - name: Generate CFG diff
+      shell: bash
+      working-directory: syslog-ng-cfg-helper
+      run: |
+        poetry run python ./syslog_ng_cfg_helper/generate_diff.py -o ${GITHUB_WORKSPACE}/base.db -n ${GITHUB_WORKSPACE}/head.db > ${GITHUB_WORKSPACE}/diff
+
+    - name: Comment CFG differences
+      shell: bash
+      working-directory: syslog-ng
+      run: |
+        EXISTING_COMMENT_ID=$(gh api \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          /repos/${{ github.repository }}/issues/${{ github.event.number }}/comments \
+          --jq '.[] | select(.user.login=="github-actions[bot]") | select(.user.type=="Bot") | select(.user.id==41898282) | select(.body | startswith("#### This Pull Request introduces config grammar changes")) | .id')
+
+        if [[ $(wc -l ${GITHUB_WORKSPACE}/diff | cut -d " " -f1) -gt 1 ]]; then
+          awk '{printf "%s\\n", $0}' ${GITHUB_WORKSPACE}/diff > ${GITHUB_WORKSPACE}/diff_escaped
+
+          COMMENT="#### This Pull Request introduces config grammar changes\r\n"
+          COMMENT="${COMMENT}[${{ github.repository_owner }}/${COMMON_ANCESTOR_REF}](https://github.com/${{ github.repository }}/tree/${COMMON_ANCESTOR_REF}) -> [${HEAD_REPOSITORY_OWNER}/${HEAD_REF_NAME}](https://github.com/${HEAD_REPOSITORY_OWNER}/syslog-ng/tree/${HEAD_REF_NAME})\r\n"
+          COMMENT="${COMMENT}<details>\r\n\r\n"
+          COMMENT="${COMMENT}\`\`\`diff\r\n"
+          COMMENT="${COMMENT}$(cat ${GITHUB_WORKSPACE}/diff_escaped)\n"
+          COMMENT="${COMMENT}\`\`\`\r\n"
+          COMMENT="${COMMENT}</details>"
+
+          jq -n --arg body "$(echo -e "${COMMENT}")" '{body:$body}' > ${GITHUB_WORKSPACE}/comment
+
+          if [[ -n "${EXISTING_COMMENT_ID}" ]]; then
+            gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              /repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT_ID} \
+              --input ${GITHUB_WORKSPACE}/comment
+            echo -e "\n::notice::Updated comment: ${EXISTING_COMMENT_ID}"
+          else
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              /repos/${{ github.repository }}/issues/${{ github.event.number }}/comments \
+              --input ${GITHUB_WORKSPACE}/comment
+            echo -e "\n::notice::Created new comment"
+          fi
+        else
+          if [[ -n "${EXISTING_COMMENT_ID}" ]]; then
+            gh api \
+              --method DELETE \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              /repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT_ID}
+            echo -e "\n::notice::Removed comment: ${EXISTING_COMMENT_ID}"
+          else
+            echo -e "\n::notice::Nothing to do"
+          fi
+        fi
