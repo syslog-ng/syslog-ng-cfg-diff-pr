@@ -1,5 +1,5 @@
-name: syslog-ng CFG diff (comment on PR)
-description: Calculates the config differences that a PR introduces and creates/updates a comment about it.
+name: syslog-ng CFG diff (PR)
+description: Calculates the config differences that a PR introduces and prepares a comment about it, to be picked up by a workflow_run workflow.
 
 runs:
   using: composite
@@ -80,16 +80,10 @@ runs:
       run: |
         poetry run python ./syslog_ng_cfg_helper/generate_diff.py -o ${GITHUB_WORKSPACE}/base.db -n ${GITHUB_WORKSPACE}/head.db > ${GITHUB_WORKSPACE}/diff
 
-    - name: Comment CFG differences
+    - name: Generate comment of CFG differences
       shell: bash
       working-directory: syslog-ng
       run: |
-        EXISTING_COMMENT_ID=$(gh api \
-          -H "Accept: application/vnd.github+json" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          /repos/${{ github.repository }}/issues/${{ github.event.number }}/comments \
-          --jq '.[] | select(.user.login=="github-actions[bot]") | select(.user.type=="Bot") | select(.user.id==41898282) | select(.body | startswith("#### This Pull Request introduces config grammar changes")) | .id')
-
         if [[ $(wc -l ${GITHUB_WORKSPACE}/diff | cut -d " " -f1) -gt 1 ]]; then
           awk '{printf "%s\\n", $0}' ${GITHUB_WORKSPACE}/diff > ${GITHUB_WORKSPACE}/diff_escaped
 
@@ -102,33 +96,12 @@ runs:
           COMMENT="${COMMENT}</details>"
 
           jq -n --arg body "$(echo -e "${COMMENT}")" '{body:$body}' > ${GITHUB_WORKSPACE}/comment
-
-          if [[ -n "${EXISTING_COMMENT_ID}" ]]; then
-            gh api \
-              --method PATCH \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              /repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT_ID} \
-              --input ${GITHUB_WORKSPACE}/comment
-            echo -e "\n::notice::Updated comment: ${EXISTING_COMMENT_ID}"
-          else
-            gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              /repos/${{ github.repository }}/issues/${{ github.event.number }}/comments \
-              --input ${GITHUB_WORKSPACE}/comment
-            echo -e "\n::notice::Created new comment"
-          fi
         else
-          if [[ -n "${EXISTING_COMMENT_ID}" ]]; then
-            gh api \
-              --method DELETE \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              /repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT_ID}
-            echo -e "\n::notice::Removed comment: ${EXISTING_COMMENT_ID}"
-          else
-            echo -e "\n::notice::Nothing to do"
-          fi
+          touch ${GITHUB_WORKSPACE}/comment
         fi
+
+    - name: Upload comment as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: comment
+        path: comment
