@@ -101,7 +101,7 @@ runs:
         fi
 
     - name: Upload comment as artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: comment
         path: comment
