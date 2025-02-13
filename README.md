@@ -1,6 +1,6 @@
 # syslog-ng config grammar diff (PR) V2
 
-This action uses [syslog-ng-cfg-helper](https://github.com/alltilla/syslog-ng-cfg-helper) to calculate the config differences that a PR introduces and prepares a comment about it, to be picked up by a workflow_run workflow.
+This action uses [syslog-ng-cfg-helper](https://github.com/syslog-ng/syslog-ng-cfg-helper) to calculate the config differences that a PR introduces and prepares a comment about it, to be picked up by a workflow_run workflow.
 
 For example: https://github.com/alltilla/syslog-ng/pull/123
 
@@ -26,7 +26,7 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: alltilla/syslog-ng-cfg-diff-pr@v2
+      - uses: syslog-ng/syslog-ng-cfg-diff-pr@v2
         continue-on-error: true
 ```
 
