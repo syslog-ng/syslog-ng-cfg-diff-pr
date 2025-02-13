@@ -7,7 +7,7 @@ runs:
     - name: Checkout syslog-ng-cfg-helper source
       uses: actions/checkout@v4
       with:
-        repository: alltilla/syslog-ng-cfg-helper
+        repository: syslog-ng/syslog-ng-cfg-helper
         path: syslog-ng-cfg-helper
 
     - name: Setup syslog-ng-cfg-helper
